@@ -61,9 +61,11 @@ namespace MaxVPNService
             public struct AddressUnion
             {
                 [FieldOffset(0)]
-                public IPAddress V4;
+                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+                public byte[] V4;
                 [FieldOffset(0)]
-                public IPAddress V6;
+                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+                public byte[] V6;
             }
 
             public AddressUnion Address;
@@ -100,15 +102,36 @@ namespace MaxVPNService
             public uint PeersCount;
         }
 
+
         [StructLayout(LayoutKind.Sequential)]
         public struct SOCKADDR_INET
         {
             public ushort sin_family;
             public ushort sin_port;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] // Increased size to accommodate IPv6
             public byte[] sin_addr;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
             public byte[] sin_zero;
+
+            // Helper method to set the address based on IPAddress
+            public void SetAddress(IPAddress ipAddress)
+            {
+                sin_family = (ushort)(ipAddress.AddressFamily == AddressFamily.InterNetworkV6 ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork);
+                sin_port = (ushort)IPAddress.HostToNetworkOrder((short)ushort.Parse(sin_port.ToString())); // Ensure port is in network order
+
+                byte[] ipBytes = ipAddress.GetAddressBytes();
+                if (ipAddress.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    sin_addr = new byte[16]; // Initialize to 16
+                    ipBytes.CopyTo(sin_addr, 0);
+                    // Pad the remaining bytes if needed (though likely not strictly necessary)
+                }
+                else if (ipAddress.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    sin_addr = new byte[16];
+                    ipBytes.CopyTo(sin_addr, 0);
+                }
+            }
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -251,36 +274,74 @@ namespace MaxVPNService
 
         public static byte[] WireguardInterfaceToBytes(WIREGUARD_INTERFACE config, WIREGUARD_PEER[] peers, WIREGUARD_ALLOWED_IP[][] allowedIps)
         {
-            int configSize = Marshal.SizeOf(config);
-            int peersSize = peers.Length * Marshal.SizeOf(typeof(WIREGUARD_PEER));
-            int allowedIpsSize = 0;
-            foreach (WIREGUARD_ALLOWED_IP[] allowedIpArray in allowedIps)
+            int bufferSize = Marshal.SizeOf(config);
+
+            if (peers != null && peers.Length == 1)
             {
-                if (allowedIpArray != null)
-                    allowedIpsSize += allowedIpArray.Length * Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                bufferSize += Marshal.SizeOf(peers[0]);
+                if (allowedIps != null && allowedIps.Length == 1 && allowedIps[0] != null)
+                {
+                    bufferSize += allowedIps[0].Length * Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                }
+            }
+            else if (peers != null && peers.Length > 1)
+            {
+                // Handle multiple peers as in the previous revision
+                foreach (var peer in peers)
+                {
+                    bufferSize += Marshal.SizeOf(peer);
+                }
+                if (allowedIps != null)
+                {
+                    foreach (var ipList in allowedIps)
+                    {
+                        if (ipList != null)
+                        {
+                            bufferSize += ipList.Length * Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                        }
+                    }
+                }
             }
 
-            byte[] buffer = new byte[configSize + peersSize + allowedIpsSize];
+            byte[] buffer = new byte[bufferSize];
             IntPtr bufferPtr = Marshal.AllocHGlobal(buffer.Length);
+            IntPtr currentPtr = bufferPtr;
 
             try
             {
-                Marshal.StructureToPtr(config, bufferPtr, false);
-                IntPtr currentPtr = bufferPtr + configSize;
+                Marshal.StructureToPtr(config, currentPtr, false);
+                currentPtr += Marshal.SizeOf(config);
 
-                for (int i = 0; i < peers.Length; i++)
+                if (peers != null && peers.Length == 1)
                 {
-                    Marshal.StructureToPtr(peers[i], currentPtr, false);
-                    currentPtr += Marshal.SizeOf(typeof(WIREGUARD_PEER));
-                    if (allowedIps[i] != null)
+                    Marshal.StructureToPtr(peers[0], currentPtr, false);
+                    currentPtr += Marshal.SizeOf(peers[0]);
+
+                    if (allowedIps != null && allowedIps.Length == 1 && allowedIps[0] != null)
                     {
-                        for (int j = 0; j < allowedIps[i].Length; j++)
+                        for (int j = 0; j < allowedIps[0].Length; j++)
                         {
-                            Marshal.StructureToPtr(allowedIps[i][j], currentPtr, false);
+                            Marshal.StructureToPtr(allowedIps[0][j], currentPtr, false);
                             currentPtr += Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
                         }
                     }
+                }
+                else if (peers != null && peers.Length > 1)
+                {
+                    for (int i = 0; i < peers.Length; i++)
+                    {
+                        Marshal.StructureToPtr(peers[i], currentPtr, false);
+                        currentPtr += Marshal.SizeOf(peers[i]);
 
+                        if (allowedIps != null && i < allowedIps.Length && allowedIps[i] != null)
+                        {
+                            for (int j = 0; j < allowedIps[i].Length; j++)
+                            {
+                                Marshal.StructureToPtr(allowedIps[i][j], currentPtr, false);
+                                currentPtr += Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                            }
+                        }
+                    }
                 }
 
                 Marshal.Copy(bufferPtr, buffer, 0, buffer.Length);
@@ -345,20 +406,5 @@ namespace MaxVPNService
             }
         }
 
-        public static bool SetConfiguration(IntPtr adapter, WIREGUARD_INTERFACE config, WIREGUARD_PEER[] peers, WIREGUARD_ALLOWED_IP[][] allowedIps)
-        {
-            byte[] configBytes = WireguardInterfaceToBytes(config, peers, allowedIps);
-            IntPtr configPtr = Marshal.AllocHGlobal(configBytes.Length);
-            Marshal.Copy(configBytes, 0, configPtr, configBytes.Length);
-
-            try
-            {
-                return WireGuardSetConfiguration(adapter, configPtr, (uint)configBytes.Length);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(configPtr);
-            }
-        }
     }
 }
