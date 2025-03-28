@@ -132,7 +132,7 @@ namespace MaxVPNService
         {
             try
             {
-                adapterHandle = WireGuardManager.InitializeWireGuardAdapter("wg0");
+                adapterHandle = WireGuardManager.InitializeWireGuardAdapter("maxwg0");
                 WireGuardDllWrapper.SetLogger(MyLoggerCallback);
                 WireGuardConfig config = JsonSerializer.Deserialize<WireGuardConfig>(payload);
                 if (config == null)

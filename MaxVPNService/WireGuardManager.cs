@@ -105,49 +105,20 @@ namespace MaxVPNService
 
                     IPAddress parsedIp = IPAddress.Parse(ip);
 
+                    // Prepare the structure to store the allowed IP
                     allAllowedIps[i][j] = new WIREGUARD_ALLOWED_IP
                     {
-                        AddressFamily = parsedIp.AddressFamily,
-                        Address = new WIREGUARD_ALLOWED_IP.AddressUnion(),
+                        AddressFamily = (ushort)parsedIp.AddressFamily, // Cast to ushort for marshaling
                         Cidr = cidr
                     };
 
-                    if (parsedIp.AddressFamily == AddressFamily.InterNetwork)
-                    {
-                        allAllowedIps[i][j].Address.V4 = parsedIp.GetAddressBytes();
-                    }
-                    else if (parsedIp.AddressFamily == AddressFamily.InterNetworkV6)
-                    {
-                        allAllowedIps[i][j].Address.V6 = parsedIp.GetAddressBytes();
-                    }
+                    // Initialize the appropriate address field based on IP version
+                    allAllowedIps[i][j].Address = new byte[16];
+                    Array.Copy(parsedIp.GetAddressBytes(), allAllowedIps[i][j].Address, parsedIp.GetAddressBytes().Length);                    
                 }
             }
 
-            //EventLoggerHelper.LogInterfaceContents(wgInterface);
-
-            //// Log the peer contents
-            //if (wgPeers != null)
-            //{
-            //    for (int i = 0; i < wgPeers.Length; i++)
-            //    {
-            //        EventLoggerHelper.LogPeerContents(wgPeers[i], i);
-            //    }
-            //}
-
-            //// Log the allowed IP contents
-            //if (allAllowedIps != null)
-            //{
-            //    for (int i = 0; i < allAllowedIps.Length; i++)
-            //    {
-            //        if (allAllowedIps[i] != null)
-            //        {
-            //            for (int j = 0; j < allAllowedIps[i].Length; j++)
-            //            {
-            //               // EventLoggerHelper.LogAllowedIpContents(allAllowedIps[i][j], i, j);
-            //            }
-            //        }
-            //    }
-            //}
+        
 
 
             // 4. Call SetConfiguration using the byte array method
@@ -157,7 +128,7 @@ namespace MaxVPNService
             try
             {
                 Marshal.Copy(configBytes, 0, configPtr, configBytes.Length);
-                if (!WireGuardDllWrapper.WireGuardSetConfiguration(adapterHandle, configPtr, (uint)configBytes.Length))
+                if (!WireGuardDllWrapper.WireGuardSetConfiguration(adapterHandle, configPtr, (UInt32)configBytes.Length))
                 {
                     int error = Marshal.GetLastWin32Error();
                     Console.WriteLine($"Failed to set WireGuard configuration. Error Code: {error}");

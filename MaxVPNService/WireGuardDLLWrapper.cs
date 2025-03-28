@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Net;
 using System.Net.Sockets;
 using System.ComponentModel;
+using static MaxVPNService.WireGuardDllWrapper.WIREGUARD_ALLOWED_IP;
 
 namespace MaxVPNService
 {
@@ -57,20 +58,13 @@ namespace MaxVPNService
         [StructLayout(LayoutKind.Sequential, Pack = 8)]
         public struct WIREGUARD_ALLOWED_IP
         {
-            [StructLayout(LayoutKind.Explicit)]
-            public struct AddressUnion
-            {
-                [FieldOffset(0)]
-                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
-                public byte[] V4;
-                [FieldOffset(0)]
-                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-                public byte[] V6;
-            }
-
-            public AddressUnion Address;
-            public AddressFamily AddressFamily;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] Address;
+            public ushort AddressFamily;  // ADDRESS_FAMILY is usually a 16-bit value
             public byte Cidr;
+            // 5 bytes of padding to reach 24 total
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)]
+            private byte[] __padding;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -271,80 +265,102 @@ namespace MaxVPNService
             return state;
         }
 
-
-        public static byte[] WireguardInterfaceToBytes(WIREGUARD_INTERFACE config, WIREGUARD_PEER[] peers, WIREGUARD_ALLOWED_IP[][] allowedIps)
+        public static byte[] WireguardInterfaceToBytes(
+            WIREGUARD_INTERFACE config,
+            WIREGUARD_PEER[] peers,
+            WIREGUARD_ALLOWED_IP[][] allowedIps)
         {
-            int bufferSize = Marshal.SizeOf(config);
+            // 1) Calculate total buffer size
+            int sizeOfInterface = Marshal.SizeOf(typeof(WIREGUARD_INTERFACE));
+            int sizeOfPeer = Marshal.SizeOf(typeof(WIREGUARD_PEER));
 
-            if (peers != null && peers.Length == 1)
+            // Each _WIREGUARD_ALLOWED_IP is 24 bytes (8-byte aligned)
+            const int SIZE_OF_ALLOWED_IP = 24;
+
+            // Start buffer size with the interface struct
+            int bufferSize = sizeOfInterface;
+
+            // Add each peer
+            if (peers != null)
             {
-                bufferSize += Marshal.SizeOf(peers[0]);
-                if (allowedIps != null && allowedIps.Length == 1 && allowedIps[0] != null)
+                foreach (WIREGUARD_PEER peer in peers)
                 {
-                    bufferSize += allowedIps[0].Length * Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
-                }
-            }
-            else if (peers != null && peers.Length > 1)
-            {
-                // Handle multiple peers as in the previous revision
-                foreach (var peer in peers)
-                {
-                    bufferSize += Marshal.SizeOf(peer);
-                }
-                if (allowedIps != null)
-                {
-                    foreach (var ipList in allowedIps)
+                    bufferSize += sizeOfPeer;
+
+                    // Add each allowed IP
+                    int index = Array.IndexOf(peers, peer);
+                    if (allowedIps != null && index >= 0 && index < allowedIps.Length)
                     {
-                        if (ipList != null)
+                        WIREGUARD_ALLOWED_IP[] ipArray = allowedIps[index];
+                        if (ipArray != null)
                         {
-                            bufferSize += ipList.Length * Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                            // Each WIREGUARD_ALLOWED_IP = 24 bytes
+                            bufferSize += ipArray.Length * SIZE_OF_ALLOWED_IP;
                         }
                     }
                 }
             }
 
+            // 2) Allocate the buffer
             byte[] buffer = new byte[bufferSize];
-            IntPtr bufferPtr = Marshal.AllocHGlobal(buffer.Length);
+            IntPtr bufferPtr = Marshal.AllocHGlobal(bufferSize);
             IntPtr currentPtr = bufferPtr;
 
             try
             {
+                // 3) Write the WIREGUARD_INTERFACE struct
                 Marshal.StructureToPtr(config, currentPtr, false);
-                currentPtr += Marshal.SizeOf(config);
+                currentPtr += sizeOfInterface;
 
-                if (peers != null && peers.Length == 1)
+                // 4) For each peer, write the peer struct and its AllowedIPs
+                if (peers != null)
                 {
-                    Marshal.StructureToPtr(peers[0], currentPtr, false);
-                    currentPtr += Marshal.SizeOf(peers[0]);
-
-                    if (allowedIps != null && allowedIps.Length == 1 && allowedIps[0] != null)
+                    for (int p = 0; p < peers.Length; p++)
                     {
-                        for (int j = 0; j < allowedIps[0].Length; j++)
-                        {
-                            Marshal.StructureToPtr(allowedIps[0][j], currentPtr, false);
-                            currentPtr += Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
-                        }
-                    }
-                }
-                else if (peers != null && peers.Length > 1)
-                {
-                    for (int i = 0; i < peers.Length; i++)
-                    {
-                        Marshal.StructureToPtr(peers[i], currentPtr, false);
-                        currentPtr += Marshal.SizeOf(peers[i]);
+                        Marshal.StructureToPtr(peers[p], currentPtr, false);
+                        currentPtr += sizeOfPeer;
 
-                        if (allowedIps != null && i < allowedIps.Length && allowedIps[i] != null)
+                        // 5) Manually write each WIREGUARD_ALLOWED_IP (24 bytes each)
+                        if (allowedIps != null && p < allowedIps.Length && allowedIps[p] != null)
                         {
-                            for (int j = 0; j < allowedIps[i].Length; j++)
+                            foreach (WIREGUARD_ALLOWED_IP ip in allowedIps[p])
                             {
-                                Marshal.StructureToPtr(allowedIps[i][j], currentPtr, false);
-                                currentPtr += Marshal.SizeOf(typeof(WIREGUARD_ALLOWED_IP));
+                                // -- (a) Write 16 bytes for the union
+                                // Even if IPv4 is only 4 bytes, the union is 16 bytes in C.
+                                bool isV4 = (ip.AddressFamily == (ushort)AddressFamily.InterNetwork);
+                                // If it’s IPv4, copy the first 4 bytes into a 16-byte array (the rest can be zero).
+                                byte[] unionBytes = new byte[16];
+                                if (isV4 && ip.Address != null)
+                                {
+                                    Array.Copy(ip.Address, 0, unionBytes, 0, 4);
+                                }
+                                else if (!isV4 && ip.Address != null)
+                                {
+                                    Array.Copy(ip.Address, 0, unionBytes, 0, 16);
+                                }
+
+                                // Copy that into unmanaged memory
+                                Marshal.Copy(unionBytes, 0, currentPtr, 16);
+                                currentPtr += 16;
+
+                                // -- (b) Write 2 bytes for AddressFamily
+                                short af = (short)ip.AddressFamily;
+                                Marshal.WriteInt16(currentPtr, af);
+                                currentPtr += 2;
+
+                                // -- (c) Write 1 byte for Cidr
+                                Marshal.WriteByte(currentPtr, ip.Cidr);
+                                currentPtr += 1;
+
+                                // -- (d) Add 5 bytes of padding to reach 24 bytes total
+                                currentPtr += 5;
                             }
                         }
                     }
                 }
 
-                Marshal.Copy(bufferPtr, buffer, 0, buffer.Length);
+                // 6) Copy the unmanaged buffer back to a managed byte array
+                Marshal.Copy(bufferPtr, buffer, 0, bufferSize);
             }
             finally
             {
@@ -353,6 +369,8 @@ namespace MaxVPNService
 
             return buffer;
         }
+
+      
 
         public static (WIREGUARD_INTERFACE config, WIREGUARD_PEER[] peers, WIREGUARD_ALLOWED_IP[][] allowedIps) GetConfiguration(IntPtr adapter)
         {
@@ -377,7 +395,7 @@ namespace MaxVPNService
                 }
 
                 WIREGUARD_INTERFACE config = (WIREGUARD_INTERFACE)Marshal.PtrToStructure(buffer, typeof(WIREGUARD_INTERFACE));
-                int peersCount = (int)config.PeersCount;
+                uint peersCount = config.PeersCount;
 
                 WIREGUARD_PEER[] peers = new WIREGUARD_PEER[peersCount];
                 WIREGUARD_ALLOWED_IP[][] allowedIps = new WIREGUARD_ALLOWED_IP[peersCount][];
@@ -388,7 +406,7 @@ namespace MaxVPNService
                 {
                     peers[i] = (WIREGUARD_PEER)Marshal.PtrToStructure(currentPtr, typeof(WIREGUARD_PEER));
                     currentPtr += Marshal.SizeOf(typeof(WIREGUARD_PEER));
-                    int allowedIpsCount = (int)peers[i].AllowedIPsCount;
+                    uint allowedIpsCount = peers[i].AllowedIPsCount;
                     allowedIps[i] = new WIREGUARD_ALLOWED_IP[allowedIpsCount];
 
                     for (int j = 0; j < allowedIpsCount; j++)
