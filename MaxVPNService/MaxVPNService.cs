@@ -8,7 +8,7 @@ using System.ServiceProcess;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using static MaxVPNService.WireGuardDllWrapper;
+using Vanara.PInvoke;
 
 namespace MaxVPNService
 {
@@ -16,8 +16,7 @@ namespace MaxVPNService
     {
         private CancellationTokenSource _cancellationTokenSource;
         private Task _pipeServerTask;      
-        private Guid guid;
-        private IntPtr adapterHandle;
+        private Adapter _wireGuardAdapter;
 
         public 
             MaxVPNService()
@@ -27,9 +26,10 @@ namespace MaxVPNService
 
         protected override void OnStart(string[] args)
         {
-            _cancellationTokenSource = new CancellationTokenSource();
-
+            WireGuardManager.Instance.SetEventLog(this.EventLog);
+            _cancellationTokenSource = new CancellationTokenSource();           
             _pipeServerTask = Task.Run(() => StartPipeServer(_cancellationTokenSource.Token));
+
 
             // Optional logging
             EventLog.WriteEntry("MaxVPNService started and pipe server is listening.", EventLogEntryType.Information);
@@ -39,6 +39,11 @@ namespace MaxVPNService
         protected override void OnStop()
         {
             _cancellationTokenSource.Cancel();
+            if (_wireGuardAdapter != null)
+            {
+                _wireGuardAdapter.Dispose();
+                _wireGuardAdapter = null; // Optionally set it to null after disposing
+            }
 
             try
             {
@@ -132,18 +137,7 @@ namespace MaxVPNService
         {
             try
             {
-                adapterHandle = WireGuardManager.InitializeWireGuardAdapter("maxwg0");
-                WireGuardDllWrapper.SetLogger(MyLoggerCallback);
-                WireGuardConfig config = JsonSerializer.Deserialize<WireGuardConfig>(payload);
-                if (config == null)
-                    return false;
-                WireGuardManager.ConfigureAdapter(adapterHandle, config);
-
-                // TODO: Add your VPN config logic here!
-                EventLog.WriteEntry($"[Connect] Interface: {config.Interface.Address} - Peers: {config.Peers.Count}", EventLogEntryType.Information);
-
-
-                return true;
+                return WireGuardManager.Instance.LoadConfiguration(payload);
             }
             catch (Exception ex)
             {
@@ -158,6 +152,11 @@ namespace MaxVPNService
             {
                 // TODO: Add your VPN disconnect logic here!
                 EventLog.WriteEntry("[Disconnect] VPN disconnected.", EventLogEntryType.Information);
+                if (_wireGuardAdapter != null)
+                {
+                    _wireGuardAdapter.Dispose();
+                    _wireGuardAdapter = null; // Optionally set it to null after disposing
+                }
 
                 return true;
             }
@@ -167,10 +166,7 @@ namespace MaxVPNService
                 return false;
             }
         }
-        private static void MyLoggerCallback(WIREGUARD_LOGGER_LEVEL level, ulong timestamp, string message)
-        {
-            Console.WriteLine($"[{level}] {DateTime.FromFileTimeUtc((long)timestamp)}: {message}");
-        }
+      
     }
 
     // WireGuardConfig + Peer + Interface classes go here.

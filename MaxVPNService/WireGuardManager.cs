@@ -1,145 +1,156 @@
 ﻿using System;
-using System.Net;
-using System.Net.Sockets;
-using System.Runtime.InteropServices;
-using static MaxVPNService.WireGuardDllWrapper;
+using Vanara.PInvoke;
+using System.Diagnostics;
+using System.IO;
 
 namespace MaxVPNService
 {
-    internal class WireGuardManager
+    public sealed class WireGuardManager : IDisposable
     {
-        public static IntPtr adapterHandle;
+        private static WireGuardManager _instance = null;
+        private static readonly object _lock = new object();
+        private Adapter _wireGuardAdapter;
+        private EventLog _eventLog;
 
-        // Method to initialize a new WireGuard adapter
-        public static IntPtr InitializeWireGuardAdapter(string adapterName)
+        private WireGuardManager()
         {
-            adapterHandle = WireGuardDllWrapper.WireGuardOpenAdapter(adapterName);
-            if (adapterHandle != IntPtr.Zero)
-            {
-                WireGuardCloseAdapter(adapterHandle); // Ensure we start fresh
-            }
-
-            Guid newAdapterGuid = Guid.NewGuid(); // Create a new GUID for the adapter
-            adapterHandle = WireGuardCreateAdapter(adapterName, "WireGuard", newAdapterGuid);
-
-            if (adapterHandle == IntPtr.Zero)
-            {
-                int error = Marshal.GetLastWin32Error();
-                throw new Exception($"Failed to create a new WireGuard adapter. Win32 Error Code: {error}");
-            }
-
-            return adapterHandle;
+            // Private constructor to prevent external instantiation
         }
 
-        // Method to configure the WireGuard adapter with a given configuration
-        public static void ConfigureAdapter(IntPtr adapterHandle, WireGuardConfig config)
+        public void SetEventLog(EventLog eventLog)
         {
-            byte[] privateKeyBytes = Convert.FromBase64String(config.Interface.PrivateKey);
+            _eventLog = eventLog;
+        }
+        private void LogInformation(string message)
+        {
+            _eventLog?.WriteEntry(message, EventLogEntryType.Information);
+        }
 
-            // 1. Interface Configuration
-            WIREGUARD_INTERFACE wgInterface = new WIREGUARD_INTERFACE
+        private void LogWarning(string message)
+        {
+            _eventLog?.WriteEntry(message, EventLogEntryType.Warning);
+        }
+
+        private void LogError(string message)
+        {
+            _eventLog?.WriteEntry(message, EventLogEntryType.Error);
+        }
+
+        public static WireGuardManager Instance
+        {
+            get
             {
-                Flags = WIREGUARD_INTERFACE_FLAG.WIREGUARD_INTERFACE_HAS_PRIVATE_KEY,
-                ListenPort = 0,
-                PrivateKey = new byte[WIREGUARD_KEY_LENGTH],
-                PublicKey = new byte[WIREGUARD_KEY_LENGTH],
-                PeersCount = (uint)config.Peers.Count, // Use the number of peers from the config
-            };
-
-            // Fill PrivateKey.
-            if (privateKeyBytes.Length > WIREGUARD_KEY_LENGTH)
-            {
-                throw new ArgumentException("The provided private key is too long to fit in the allocated byte array.");
-            }
-
-            Array.Clear(wgInterface.PrivateKey, 0, WIREGUARD_KEY_LENGTH);
-            Array.Copy(privateKeyBytes, wgInterface.PrivateKey, privateKeyBytes.Length);
-
-            // 2. Peer Configuration
-            WIREGUARD_PEER[] wgPeers = new WIREGUARD_PEER[config.Peers.Count]; // Array of peers
-
-            WIREGUARD_ALLOWED_IP[][] allAllowedIps = new WIREGUARD_ALLOWED_IP[config.Peers.Count][]; // important
-
-            for (int i = 0; i < config.Peers.Count; i++)
-            {
-                byte[] publicKeyBytes = Convert.FromBase64String(config.Peers[i].PublicKey);
-                if (publicKeyBytes.Length > WIREGUARD_KEY_LENGTH)
+                lock (_lock)
                 {
-                    throw new ArgumentException($"The provided public key for peer {i} is too long.");
-                }
-
-                wgPeers[i] = new WIREGUARD_PEER
-                {
-                    Flags = WIREGUARD_PEER_FLAG.WIREGUARD_PEER_HAS_PUBLIC_KEY | WIREGUARD_PEER_FLAG.WIREGUARD_PEER_HAS_ENDPOINT | WIREGUARD_PEER_FLAG.WIREGUARD_PEER_REPLACE_ALLOWED_IPS,
-                    PublicKey = new byte[WIREGUARD_KEY_LENGTH],
-                    Endpoint = new SOCKADDR_INET(),
-                    AllowedIPsCount = (uint)config.Peers[i].AllowedIPs.Split(',').Length, // Set AllowedIPsCount dynamically
-                };
-                Array.Clear(wgPeers[i].PublicKey, 0, WIREGUARD_KEY_LENGTH);
-                Array.Copy(publicKeyBytes, wgPeers[i].PublicKey, publicKeyBytes.Length);
-
-                string endpoint = config.Peers[i].Endpoint;
-                string[] parts = endpoint.Split(':');
-                if (parts.Length == 2)
-                {
-                    string ipString = parts[0];
-                    string portString = parts[1];
-                    IPAddress ipAddress;
-                    if (IPAddress.TryParse(ipString, out ipAddress))
+                    if (_instance == null)
                     {
-                        wgPeers[i].Endpoint.sin_port = (ushort)ushort.Parse(portString);
-                        wgPeers[i].Endpoint.SetAddress(ipAddress); // Use the helper method
+                        _instance = new WireGuardManager();
+                    }
+                    return _instance;
+                }
+            }
+        }
+
+        public bool InitializeAdapter()
+        {
+            try
+            {
+                if (_wireGuardAdapter == null)
+                {
+                    _wireGuardAdapter = new Adapter("max0", "WireGuard");
+                    Guid adapterGuid = Guid.NewGuid();
+                    IpHlpApi.NET_LUID adapterLuid;
+                    _wireGuardAdapter.Init(ref adapterGuid, out adapterLuid);
+                    LogInformation($"WireGuard Adapter 'max0' initialized with GUID: {adapterGuid} and LUID: {adapterLuid}");
+                    return true;
+                }
+                return true; // Adapter already initialized
+            }
+            catch (Exception ex)
+            {
+                LogError($"[WireGuardManager] Error initializing adapter: {ex.Message}");
+                return false;
+            }
+        }
+
+        public bool LoadConfiguration(string configFileContent)
+        {
+            try
+            {
+                if (_wireGuardAdapter == null)
+                {
+                    if (!InitializeAdapter())
+                    {
+                        return false;
                     }
                 }
 
-                // 3. Allowed IPs for Peer.
-                string[] ipAddresses = config.Peers[i].AllowedIPs.Split(',');
-                allAllowedIps[i] = new WIREGUARD_ALLOWED_IP[ipAddresses.Length];
-
-                for (int j = 0; j < ipAddresses.Length; j++)
+                // Create a temporary file to store the config content
+                string tempFilePath = Path.GetTempFileName();
+                try
                 {
-                    string ipAddress = ipAddresses[j].Trim();
-                    int slashIndex = ipAddress.IndexOf('/');
-                    string ip = ipAddress.Substring(0, slashIndex);
-                    byte cidr = byte.Parse(ipAddress.Substring(slashIndex + 1));
+                    File.WriteAllText(tempFilePath, configFileContent);
 
-                    IPAddress parsedIp = IPAddress.Parse(ip);
+                    // Parse the configuration file
+                    WgConfig parsedWgConfig; // Declare the output parameter
+                    string[] filePaths = new string[] { tempFilePath }; // Create a string array
 
-                    // Prepare the structure to store the allowed IP
-                    allAllowedIps[i][j] = new WIREGUARD_ALLOWED_IP
+                    if (_wireGuardAdapter.ParseConfFile(filePaths, out parsedWgConfig))
                     {
-                        AddressFamily = (ushort)parsedIp.AddressFamily, // Cast to ushort for marshaling
-                        Cidr = cidr
-                    };
-
-                    // Initialize the appropriate address field based on IP version
-                    allAllowedIps[i][j].Address = new byte[16];
-                    Array.Copy(parsedIp.GetAddressBytes(), allAllowedIps[i][j].Address, parsedIp.GetAddressBytes().Length);                    
+                        LogInformation("[WireGuardManager] Configuration loaded successfully from file.");
+                        // You might want to examine or use the parsedWgConfig object if needed
+                        _wireGuardAdapter.SetStateUp();
+                        return true;
+                    }
+                    else
+                    {
+                        LogError("[WireGuardManager] Error parsing configuration file.");
+                        return false;
+                    }
+                }
+                finally
+                {
+                    // Ensure the temporary file is deleted
+                    if (File.Exists(tempFilePath))
+                    {
+                        File.Delete(tempFilePath);
+                    }
                 }
             }
+            catch (Exception ex)
+            {
+                LogError($"[WireGuardManager] Error loading configuration: {ex.Message}");
+                return false;
+            }
+        }
 
-        
-
-
-            // 4. Call SetConfiguration using the byte array method
-            byte[] configBytes = WireGuardDllWrapper.WireguardInterfaceToBytes(wgInterface, wgPeers, allAllowedIps);
-            IntPtr configPtr = Marshal.AllocHGlobal(configBytes.Length);
-
+        public bool Disconnect()
+        {
             try
             {
-                Marshal.Copy(configBytes, 0, configPtr, configBytes.Length);
-                if (!WireGuardDllWrapper.WireGuardSetConfiguration(adapterHandle, configPtr, (UInt32)configBytes.Length))
+                if (_wireGuardAdapter != null)
                 {
-                    int error = Marshal.GetLastWin32Error();
-                    Console.WriteLine($"Failed to set WireGuard configuration. Error Code: {error}");
-                    WireGuardDllWrapper.CloseAdapter(adapterHandle);
-                    adapterHandle = IntPtr.Zero;
-                    throw new Exception("Failed to set WireGuard configuration.");
+                    _wireGuardAdapter.SetStateDown();
+                    Dispose();
+                    LogInformation("[WireGuardManager] VPN disconnected and adapter removed.");
+                    return true;
                 }
+                LogInformation("[WireGuardManager] No active VPN to disconnect.");
+                return true;
             }
-            finally
+            catch (Exception ex)
             {
-                Marshal.FreeHGlobal(configPtr);
+                LogError($"[WireGuardManager] Error during disconnect: {ex.Message}");
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_wireGuardAdapter != null)
+            {
+                _wireGuardAdapter.Dispose();
+                _wireGuardAdapter = null;
             }
         }
     }
