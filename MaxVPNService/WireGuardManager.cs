@@ -85,36 +85,22 @@ namespace MaxVPNService
                     }
                 }
 
-                // Create a temporary file to store the config content
-                string tempFilePath = Path.GetTempFileName();
-                try
+                WgConfig parsedWgConfig; // Declare the output parameter
+
+                string[] lines = configFileContent.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                bool success = _wireGuardAdapter.ParseConfFile(lines, out parsedWgConfig);
+
+                if (success)
                 {
-                    File.WriteAllText(tempFilePath, configFileContent);
-
-                    // Parse the configuration file
-                    WgConfig parsedWgConfig; // Declare the output parameter
-                    string[] filePaths = new string[] { tempFilePath }; // Create a string array
-
-                    if (_wireGuardAdapter.ParseConfFile(filePaths, out parsedWgConfig))
-                    {
-                        LogInformation("[WireGuardManager] Configuration loaded successfully from file.");
-                        // You might want to examine or use the parsedWgConfig object if needed
-                        _wireGuardAdapter.SetStateUp();
-                        return true;
-                    }
-                    else
-                    {
-                        LogError("[WireGuardManager] Error parsing configuration file.");
-                        return false;
-                    }
+                    LogInformation("[WireGuardManager] Configuration loaded successfully from file.");
+                    // You might want to examine or use the parsedWgConfig object if needed
+                    _wireGuardAdapter.SetStateUp();
+                    return true;
                 }
-                finally
+                else
                 {
-                    // Ensure the temporary file is deleted
-                    if (File.Exists(tempFilePath))
-                    {
-                        File.Delete(tempFilePath);
-                    }
+                    LogError("[WireGuardManager] Error parsing configuration file.");
+                    return false;
                 }
             }
             catch (Exception ex)

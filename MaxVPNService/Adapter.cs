@@ -178,15 +178,13 @@ namespace MaxVPNService
                             continue;
                         case "address":
                             string address = value.Split(',').First().Trim();
-                            if (ValidateIPv4(address))
+                            string ipaddress = address.Split('/').First().Trim();                                                        
+                            if (ValidateIPv4(ipaddress))
                             {
-                                wgConfig.InterfaceNetwork = IPNetwork2.Parse(value.Split(',').First());
+                                wgConfig.InterfaceAddress = IPAddress.Parse(ipaddress);
+                                wgConfig.InterfaceNetwork = IPNetwork2.Parse(address);
                             }
-                            else
-                            {
-                                var ipEntry = Dns.GetHostEntry(address);
-                                wgConfig.InterfaceNetwork = IPNetwork2.Parse(ipEntry.AddressList[0].ToString());
-                            }
+                           
                             
                             continue;
                         case "dns":
