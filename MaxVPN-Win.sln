@@ -7,8 +7,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MaxVPN-Win", "MaxVPN-Win\Ma
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MaxVPNService", "MaxVPNService\MaxVPNService.csproj", "{CBE8D57F-CCFC-4E0F-9667-972D06047CA0}"
 EndProject
-Project("{54435603-DBB4-11D2-8724-00A0C9A8B90C}") = "MaxVPNInstaller", "MaxVPNInstaller\MaxVPNInstaller.vdproj", "{2395B47C-0A79-D822-F026-7B81B417C120}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,16 +41,6 @@ Global
 		{CBE8D57F-CCFC-4E0F-9667-972D06047CA0}.Release|x64.Build.0 = Release|Any CPU
 		{CBE8D57F-CCFC-4E0F-9667-972D06047CA0}.Release|x86.ActiveCfg = Release|Any CPU
 		{CBE8D57F-CCFC-4E0F-9667-972D06047CA0}.Release|x86.Build.0 = Release|Any CPU
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Debug|Any CPU.ActiveCfg = Debug
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Debug|x64.ActiveCfg = Debug
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Debug|x64.Build.0 = Debug
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Debug|x86.ActiveCfg = Debug
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Debug|x86.Build.0 = Debug
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Release|Any CPU.ActiveCfg = Release
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Release|x64.ActiveCfg = Release
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Release|x64.Build.0 = Release
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Release|x86.ActiveCfg = Release
-		{2395B47C-0A79-D822-F026-7B81B417C120}.Release|x86.Build.0 = Release
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

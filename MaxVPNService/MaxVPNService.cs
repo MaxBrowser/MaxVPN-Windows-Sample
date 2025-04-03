@@ -17,6 +17,8 @@ namespace MaxVPNService
         private CancellationTokenSource _cancellationTokenSource;
         private Task _pipeServerTask;      
         private Adapter _wireGuardAdapter;
+        private DateTime _lastStatusCheck;
+        private int timeout = 60;
 
         public 
             MaxVPNService()
@@ -29,12 +31,14 @@ namespace MaxVPNService
             WireGuardManager.Instance.SetEventLog(this.EventLog);
             _cancellationTokenSource = new CancellationTokenSource();           
             _pipeServerTask = Task.Run(() => StartPipeServer(_cancellationTokenSource.Token));
+            Task.Run(() => StartWatchdog(_cancellationTokenSource.Token)); // 👈 watchdog
 
 
             // Optional logging
             EventLog.WriteEntry("MaxVPNService started and pipe server is listening.", EventLogEntryType.Information);
           
         }
+
 
         protected override void OnStop()
         {
@@ -56,6 +60,29 @@ namespace MaxVPNService
 
             // Optional logging
             EventLog.WriteEntry("MaxVPNService stopped and pipe server was shut down.", EventLogEntryType.Information);
+        }
+
+
+        private async Task StartWatchdog(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var elapsed = DateTime.Now - _lastStatusCheck;
+                    if (elapsed.TotalSeconds > timeout)
+                    {
+                        EventLog.WriteEntry($"Watchdog: No status check for {elapsed.TotalSeconds} seconds. Disconnecting VPN.", EventLogEntryType.Warning);
+                        HandleDisconnect();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    EventLog.WriteEntry($"Watchdog error: {ex.Message}", EventLogEntryType.Error);
+                }
+
+                await Task.Delay(5000, cancellationToken); // check every 5 seconds
+            }
         }
 
         private async Task StartPipeServer(CancellationToken cancellationToken)
@@ -100,7 +127,7 @@ namespace MaxVPNService
                                 continue;
                             }
 
-                            bool result = false;
+                            string result = "";
 
                             switch (message.Command.ToLower())
                             {
@@ -110,11 +137,14 @@ namespace MaxVPNService
                                 case "disconnect":
                                     result = HandleDisconnect();
                                     break;
+                                case "status":
+                                    result = HandleStatus();
+                                    break;
                                 default:
                                     break;
                             }
 
-                            await writer.WriteLineAsync(result.ToString().ToLower());
+                            await writer.WriteLineAsync(result);
 
                             // Optional: log actions
                             EventLog.WriteEntry($"Command '{message.Command}' handled with result: {result}", EventLogEntryType.Information);
@@ -133,37 +163,61 @@ namespace MaxVPNService
             }
         }
 
-        private bool HandleConnect(string payload)
+        private string HandleConnect(string payload)
         {
             try
             {
-                return WireGuardManager.Instance.LoadConfiguration(payload);
+                if(WireGuardManager.Instance.LoadConfiguration(payload))
+                {
+                    _lastStatusCheck= DateTime.Now;
+                    return "Connected";
+                }
+                else
+                {
+                    return "connection failed";
+                }
             }
             catch (Exception ex)
             {
                 EventLog.WriteEntry($"[Connect] Error: {ex.Message}", EventLogEntryType.Error);
-                return false;
+                return $"[Connect] Error: {ex.Message}";
             }
         }
 
-        private bool HandleDisconnect()
+        private string HandleStatus()
+        {
+            _lastStatusCheck = DateTime.Now;
+            if (WireGuardManager.Instance != null)
+            {
+                istatus s = WireGuardManager.Instance.status();
+                var myData = new
+                {
+                    rx = s.rx,
+                    tx = s.tx,
+                };
+                return JsonSerializer.Serialize(myData);
+            }
+            else
+            {
+                return string.Empty;
+            }
+
+        }
+
+        private string HandleDisconnect()
         {
             try
             {
-                // TODO: Add your VPN disconnect logic here!
-                EventLog.WriteEntry("[Disconnect] VPN disconnected.", EventLogEntryType.Information);
-                if (_wireGuardAdapter != null)
-                {
-                    _wireGuardAdapter.Dispose();
-                    _wireGuardAdapter = null; // Optionally set it to null after disposing
-                }
-
-                return true;
+                WireGuardManager.Instance.Disconnect();
+                
+                return "disconnected";
+                
+                
             }
             catch (Exception ex)
             {
                 EventLog.WriteEntry($"[Disconnect] Error: {ex.Message}", EventLogEntryType.Error);
-                return false;
+                return $"[Disconnect] Error: {ex.Message}";
             }
         }
       

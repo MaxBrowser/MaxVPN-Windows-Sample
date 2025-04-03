@@ -41,5 +41,8 @@ namespace MaxVPNService
         
         [DllImport("wireguard.dll", CharSet = CharSet.Auto, EntryPoint = "WireGuardSetAdapterLogging", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         internal static extern bool setAdapterLogging(IntPtr adapter, WireGuardAdapterLoggerLevel loggingLevel);
+
+        [DllImport("wireguard.dll", CallingConvention = CallingConvention.Winapi, CharSet = CharSet.Unicode)]
+        public static extern void WireGuardCloseAdapter(IntPtr adapter);
     }
 }

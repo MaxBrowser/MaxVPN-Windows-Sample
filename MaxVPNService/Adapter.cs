@@ -418,6 +418,55 @@ namespace MaxVPNService
             return setStateResult;
         }
 
+        public void CleanupAdapterRoutes(IpHlpApi.NET_LUID adapterLuid, Action<string> log = null)
+        {
+            try
+            {
+                // --- Remove IPv4 ROUTES ---
+                var routeErr = IpHlpApi.GetIpForwardTable2(Ws2_32.ADDRESS_FAMILY.AF_INET, out var routeTable);
+                if (!routeErr.Failed)
+                {
+                    for (int i = 0; i < routeTable.NumEntries; i++)
+                    {
+                        var row = routeTable.Table[i];
+                        if (row.InterfaceLuid.Equals(adapterLuid))
+                        {
+                            log?.Invoke($"Deleting route: {row.DestinationPrefix.Prefix.Ipv4.sin_addr}");
+                            IpHlpApi.DeleteIpForwardEntry2(ref routeTable.Table[i]);
+                        }
+                    }
+                }
+                else
+                {
+                    log?.Invoke("Failed to retrieve IPv4 routing table.");
+                }
+
+                // --- Remove IPv4 UNICAST IPs ---
+                var ipErr = IpHlpApi.GetUnicastIpAddressTable(Ws2_32.ADDRESS_FAMILY.AF_INET, out var ipTable);
+                if (!ipErr.Failed)
+                {
+                    var list = ipTable.ToArray(); // Copy to an array so we can use indexing
+                    for (int i = 0; i < list.Length; i++)
+                    {
+                        var row = list[i];
+                        if (row.InterfaceLuid.Equals(adapterLuid))
+                        {
+                            log?.Invoke($"Removing IP address: {row.Address.Ipv4.sin_addr}");
+                            IpHlpApi.DeleteUnicastIpAddressEntry(ref list[i]);
+                        }
+                    }
+                }
+                else
+                {
+                    log?.Invoke("Failed to retrieve unicast IP address table.");
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"[CleanupAdapterRoutes] Exception: {ex.Message}");
+            }
+        }
+
 
 
         public unsafe WGInterface GetConfiguration()
@@ -504,7 +553,8 @@ namespace MaxVPNService
             {
                 if (disposing)
                 {
-                    NativeFunctions.freeAdapter(_handle);
+                    // NativeFunctions.freeAdapter(_handle);
+                    NativeFunctions.WireGuardCloseAdapter(_handle); // official methoid to cleanup and remove an adapter
                 }
 
                 _disposedValue = true;
