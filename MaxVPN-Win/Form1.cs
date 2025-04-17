@@ -114,7 +114,7 @@ PersistentKeepalive = 25";
         {
             try
             {
-                var pipeName = "WireGuardInterfacePipe";
+                var pipeName = "maxVPNInteractiveService";
                 using (var pipeClient = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
                 {
                     await pipeClient.ConnectAsync(3000);
@@ -136,7 +136,7 @@ PersistentKeepalive = 25";
                     toolStripStatusLabel1.Text = response;
 
                     // Dispose manually after both are done
-                    writer.Dispose();
+                   // writer.Dispose();
                     reader.Dispose();
 
                     return response;
@@ -329,8 +329,8 @@ PersistentKeepalive = 25";
 
         private async void timer1_Tick(object sender, EventArgs e)
         {
-            string result = await SendCommandAsync("status", "");
-            toolStripStatusLabel1.Text=result;
+           string result = await SendCommandAsync("status", "");
+           toolStripStatusLabel1.Text=result;
 
         }
     }

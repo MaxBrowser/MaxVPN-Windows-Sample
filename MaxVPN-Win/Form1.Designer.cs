@@ -228,7 +228,8 @@
             // toolStripStatusLabel1
             // 
             this.toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-            this.toolStripStatusLabel1.Size = new System.Drawing.Size(0, 17);
+            this.toolStripStatusLabel1.Size = new System.Drawing.Size(23, 17);
+            this.toolStripStatusLabel1.Text = "OK";
             // 
             // label7
             // 
